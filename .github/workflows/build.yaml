@@ -219,7 +219,6 @@ jobs:
 
           if [[ "${{ inputs.overclock }}" == "true" ]]; then
             cat > stage2/05-bubuntu-perf/files/config.txt << 'EOF'
-
           gpu_mem=32
           arm_freq=1400
           over_voltage=8
@@ -240,7 +239,6 @@ jobs:
           EOF
           else
             cat > stage2/05-bubuntu-perf/files/config.txt << 'EOF'
-
           gpu_mem=32
           disable_splash=1
           boot_delay=0
@@ -321,3 +319,4 @@ jobs:
           path: pi-gen/deploy/*.img.xz
           retention-days: 7
           if-no-files-found: error
+      
