@@ -26,7 +26,8 @@ on:
 
 env:
   IMG_NAME: Bubuntu-NoPigen-A1
-  IMG_SIZE: 4G
+  IMG_SIZE_MB: 4096
+  DEBIAN_RELEASE: bookworm
 
 jobs:
   build:
@@ -34,49 +35,77 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Install deps
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y debootstrap qemu-user-static kpartx parted dosfstools xz-utils arch-test
+          sudo apt-get install -y debootstrap qemu-user-static kpartx parted dosfstools xz-utils arch-test binfmt-support
 
-      - name: Create base image
+      - name: Create and partition image
         run: |
-          sudo dd if=/dev/zero of=${IMG_NAME}.img bs=1M count=4096
+          sudo dd if=/dev/zero of=${IMG_NAME}.img bs=1M count=${IMG_SIZE_MB}
           sudo parted ${IMG_NAME}.img --script mklabel msdos
           sudo parted ${IMG_NAME}.img --script mkpart primary fat32 1MiB 256MiB
           sudo parted ${IMG_NAME}.img --script mkpart primary ext4 256MiB 100%
           sudo parted ${IMG_NAME}.img --script set 1 boot on
 
-          LOOP=$(sudo kpartx -av ${IMG_NAME}.img | awk 'NR==1{print $3}' | sed 's/p1//')
-          sudo mkfs.vfat /dev/mapper/${LOOP}p1
-          sudo mkfs.ext4 /dev/mapper/${LOOP}p2
-
-          mkdir -p rootfs boot
-          sudo mount /dev/mapper/${LOOP}p2 rootfs
+      - name: Mount image and bootstrap Debian
+        run: |
+          LOOP_DEV=$(sudo losetup -fP --show ${IMG_NAME}.img)
+          echo "LOOP_DEV=${LOOP_DEV}" >> $GITHUB_ENV
+          sudo mkfs.vfat ${LOOP_DEV}p1
+          sudo mkfs.ext4 -F ${LOOP_DEV}p2
+          
+          mkdir -p rootfs
+          sudo mount ${LOOP_DEV}p2 rootfs
           sudo mkdir -p rootfs/boot/firmware
-          sudo mount /dev/mapper/${LOOP}p1 rootfs/boot/firmware
+          sudo mount ${LOOP_DEV}p1 rootfs/boot/firmware
+          
+          sudo debootstrap --arch=arm64 --foreign ${DEBIAN_RELEASE} rootfs http://deb.debian.org/debian
+          sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
+          sudo chroot rootfs /debootstrap/debootstrap --second-stage
 
-          sudo qemu-debootstrap --arch=arm64 bookworm rootfs http://deb.debian.org/debian
-
+      - name: Configure system
+        run: |
           echo "${{ inputs.hostname }}" | sudo tee rootfs/etc/hostname
+          echo "127.0.1.1	${{ inputs.hostname }}" | sudo tee -a rootfs/etc/hosts
+          
+          sudo tee rootfs/etc/apt/sources.list << 'EOF'
+          deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+          EOF
           
           sudo chroot rootfs /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
             apt-get update
             apt-get install -y --no-install-recommends \
               linux-image-arm64 systemd-sysv \
               raspberrypi-bootloader raspberrypi-kernel \
-              xfce4 xfce4-terminal lightdm chromium-browser \
-              privoxy micro git htop neofetch \
-              dbus-x11 policykit-1 gvfs
+              xfce4 xfce4-terminal lightdm network-manager \
+              chromium-browser privoxy micro git htop neofetch \
+              dbus-x11 policykit-1 gvfs ca-certificates \
+              sudo nano curl wget unzip
+              
             useradd -m -s /bin/bash ${{ inputs.username }}
             echo '${{ inputs.username }}:${{ inputs.password }}' | chpasswd
-            usermod -aG sudo ${{ inputs.username }}
-            systemctl enable lightdm privoxy
+            usermod -aG sudo,video,audio,netdev,plugdev ${{ inputs.username }}
+            
+            systemctl enable lightdm NetworkManager privoxy
             systemctl disable bluetooth cups avahi-daemon ModemManager
+            systemctl mask systemd-rfkill.service systemd-rfkill.socket
           "
 
+      - name: Set boot config
+        run: |
           if [[ "${{ inputs.overclock }}" == "true" ]]; then
             sudo tee rootfs/boot/firmware/config.txt << 'EOF'
+          # EXTREME Overclock for Pi A1
+          arm_64bit=1
           gpu_mem=32
           arm_freq=1400
           over_voltage=8
@@ -84,29 +113,39 @@ jobs:
           force_turbo=1
           temp_limit=90
           disable_splash=1
+          boot_delay=0
           dtoverlay=vc4-kms-v3d,cma-256
           gpu_freq=750
           v3d_freq=750
           sdram_freq=550
+          hdmi_force_hotplug=1
           EOF
           else
             sudo tee rootfs/boot/firmware/config.txt << 'EOF'
+          # Safe config
+          arm_64bit=1
           gpu_mem=32
           disable_splash=1
           dtoverlay=vc4-kms-v3d,cma-128
+          hdmi_force_hotplug=1
           EOF
           fi
+          
+          echo "console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait quiet splash" | sudo tee rootfs/boot/firmware/cmdline.txt
 
-          echo "root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait" | sudo tee rootfs/boot/firmware/cmdline.txt
-
-          sudo umount rootfs/boot/firmware
-          sudo umount rootfs
-          sudo kpartx -d ${IMG_NAME}.img
-          xz -T0 ${IMG_NAME}.img
+      - name: Cleanup and compress
+        if: always()
+        run: |
+          sudo rm -f rootfs/usr/bin/qemu-aarch64-static
+          sudo umount -l rootfs/boot/firmware || true
+          sudo umount -l rootfs || true
+          sudo losetup -d ${LOOP_DEV} || true
+          sudo chown $USER:$USER ${IMG_NAME}.img
+          xz -T0 -v ${IMG_NAME}.img
 
       - name: Upload Image
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.IMG_NAME }}-${{ inputs.overclock && 'OC' || 'SAFE' }}
+          name: ${{ env.IMG_NAME }}-${{ inputs.overclock == 'true' && 'OC' || 'SAFE' }}
           path: ${{ env.IMG_NAME }}.img.xz
           retention-days: 7
