@@ -220,7 +220,6 @@ jobs:
           if [[ "${{ inputs.overclock }}" == "true" ]]; then
             cat > stage2/05-bubuntu-perf/files/config.txt << 'EOF'
 
-          # MONSTER MODE A1 - KUEHLUNG PFLICHT
           gpu_mem=32
           arm_freq=1400
           over_voltage=8
@@ -242,7 +241,6 @@ jobs:
           else
             cat > stage2/05-bubuntu-perf/files/config.txt << 'EOF'
 
-          # SAFE MODE - Standard Clocks
           gpu_mem=32
           disable_splash=1
           boot_delay=0
