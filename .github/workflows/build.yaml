@@ -288,10 +288,15 @@ jobs:
           EOF
           chmod +x stage2/05-perf/01-run.sh
 
-      - name: Build Image
+ - name: Build Image
         run: |
           cd pi-gen
-          sudo./build.sh
+          sudo apt-get update
+          sudo apt-get install -y quilt parted realpath qemu-user-static debootstrap zerofree pxz zip dosfstools libarchive-tools libcap2-bin grep rsync xz-utils file git curl bc
+          touch ./stage0/SKIP ./stage1/SKIP ./stage2/SKIP
+          touch ./stage4/SKIP ./stage5/SKIP
+          echo "IMG_NAME=Bubuntu-Monster-A1" > config
+          sudo ./build-docker.sh
 
       - name: Upload Image
         uses: actions/upload-artifact@v4
