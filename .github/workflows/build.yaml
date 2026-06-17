@@ -83,7 +83,6 @@ jobs:
         run: |
           mkdir -p stage2/04-bubuntu-apps/files stage2/05-bubuntu-perf/files
 
-          # --- Stage 04: Apps & Desktop ---
           cat > stage2/04-bubuntu-apps/00-packages << 'EOF'
           micro
           git
@@ -148,7 +147,6 @@ jobs:
           EOF
           chmod +x stage2/04-bubuntu-apps/01-run.sh
 
-          # --- Stage 05: Performance + Monster Mode ---
           cat > stage2/05-bubuntu-perf/00-run.sh << 'EOF'
           #!/bin/bash -e
           install -m 644 files/config.txt "${ROOTFS_DIR}/boot/firmware/config.txt"
@@ -163,11 +161,9 @@ jobs:
           systemctl enable zram.service
           sed -i 's/CONF_SWAPSIZE=100/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile
 
-          # Kill bloat services for RAM
           systemctl disable bluetooth cups avahi-daemon ModemManager apt-daily.timer apt-daily-upgrade.timer man-db.timer triggerhappy rsyslog cron wpa_supplicant
           systemctl mask systemd-journald systemd-logind
 
-          # Auto-Resize Service
           apt-get install -y parted
           cat > /usr/lib/raspi-config/init_resize.sh << 'RESIZE'
           #!/bin/sh
@@ -200,7 +196,6 @@ jobs:
           systemctl enable resize2fs_once.service
           CHROOT
 
-          # Sysctl tuning for A1 SD
           cat >> ${ROOTFS_DIR}/etc/sysctl.conf << 'SYSCTL'
           vm.swappiness=150
           vm.vfs_cache_pressure=40
@@ -214,7 +209,6 @@ jobs:
           kernel.nmi_watchdog=0
           SYSCTL
 
-          # tmpfs for SD longevity
           cat >> ${ROOTFS_DIR}/etc/fstab << 'FSTAB'
           tmpfs /tmp tmpfs defaults,noatime,nosuid,size=800m 0 0
           tmpfs /var/log tmpfs defaults,noatime,nosuid,size=100m 0 0
@@ -223,7 +217,6 @@ jobs:
           FSTAB
           EOF
 
-          # Config.txt basierend auf Input
           if [[ "${{ inputs.overclock }}" == "true" ]]; then
             cat > stage2/05-bubuntu-perf/files/config.txt << 'EOF'
 
@@ -257,7 +250,6 @@ jobs:
           EOF
           fi
 
-          # Helper Scripts
           cat > stage2/05-bubuntu-perf/files/fps-boost << 'EOF'
           #!/bin/bash
           echo "EXTREME FPS MODE - 1400MHz / 750MHz GPU"
