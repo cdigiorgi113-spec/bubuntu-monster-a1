@@ -1,0 +1,300 @@
+name: Build Bubuntu Monster A1
+
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install deps
+        run: |
+          sudo apt update
+          sudo apt install -y coreutils quilt parted qemu-user-static debootstrap zerofree zip dosfstools libarchive-tools libcap2-bin grep rsync xz-utils file git curl bc gpg pigz xxd arch-test
+
+      - name: Clone pi-gen
+        run: git clone https://github.com/RPi-Distro/pi-gen.git
+
+      - name: Create config
+        run: |
+          cd pi-gen
+          cat > config << 'EOF'
+          IMG_NAME=Bubuntu-Monster-A1
+          RELEASE=bookworm
+          DEPLOY_COMPRESSION=xz
+          TARGET_HOSTNAME=bubuntu
+          FIRST_USER_NAME=dev
+          FIRST_USER_PASS=bubuntu
+          ENABLE_SSH=1
+          LOCALE_DEFAULT=de_DE.UTF-8
+          KEYBOARD_KEYMAP=de
+          KEYBOARD_LAYOUT=de
+          TIMEZONE_DEFAULT=Europe/Berlin
+          STAGE_LIST="stage0 stage1 stage2"
+          EOF
+
+      - name: Create stages
+        run: |
+          cd pi-gen
+          mkdir -p stage2/04-apps stage2/05-perf
+
+          # APP PACKAGES
+          cat > stage2/04-apps/00-packages << 'EOF'
+          micro
+          git
+          chromium-browser
+          privoxy
+          fonts-noto-color-emoji
+          neofetch
+          htop
+          ncdu
+          xfce4
+          xfce4-terminal
+          xfce4-whiskermenu-plugin
+          lightdm
+          lightdm-gtk-greeter
+          xserver-xorg
+          xinit
+          policykit-1
+          gvfs
+          dbus-x11
+          EOF
+
+          # APP SETUP
+          cat > stage2/04-apps/01-run.sh << 'EOF'
+          #!/bin/bash -e
+
+          on_chroot << CHROOT
+          cat > /etc/privoxy/config << 'PRIVOXY'
+          listen-address 127.0.0.1:8118
+          filterfile default.filter
+          actionsfile default.action
+          toggle 1
+          enable-remote-toggle 0
+          enable-edit-actions 0
+          buffer-limit 4096
+          PRIVOXY
+          CHROOT
+
+          cat > ${ROOTFS_DIR}/usr/local/bin/chromium-bubuntu << 'CHROMIUM'
+          #!/bin/bash
+          chromium-browser \
+          --proxy-server="http://127.0.0.1:8118" \
+          --max-old-space-size=128 \
+          --js-flags="--max-old-space-size=128" \
+          --single-process \
+          --disable-gpu \
+          --disable-software-rasterizer \
+          --disable-dev-shm-usage \
+          --no-sandbox \
+          --disable-extensions \
+          --disable-background-networking \
+          --disable-sync \
+          --disk-cache-dir=/tmp \
+          --disk-cache-size=10000000 \
+          --renderer-process-limit=1 \
+          --memory-pressure-off \
+          --user-data-dir=/tmp/chromium \
+          "${1:-https://lite.duckduckgo.com}"
+          CHROMIUM
+          chmod +x ${ROOTFS_DIR}/usr/local/bin/chromium-bubuntu
+
+          on_chroot << CHROOT
+          systemctl enable lightdm
+          systemctl enable privoxy
+          update-alternatives --set x-terminal-emulator /usr/bin/xfce4-terminal
+          CHROOT
+          EOF
+          chmod +x stage2/04-apps/01-run.sh
+
+          # PERF + A1 + FPS + AUTO-EXPAND
+          cat > stage2/05-perf/01-run.sh << 'EOF'
+          #!/bin/bash -e
+
+          # ZRAM 6x 256MB = 1.5GB für A1
+          cat > ${ROOTFS_DIR}/etc/systemd/system/zram.service << 'ZRAM'
+          [Unit]
+          Description=ZRAM 6x 256MB - A1 optimiert
+          After=local-fs.target
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/zram-start
+          RemainAfterExit=yes
+          [Install]
+          WantedBy=sysinit.target
+          ZRAM
+
+          cat > ${ROOTFS_DIR}/usr/local/bin/zram-start << 'ZRAMSH'
+          #!/bin/bash
+          modprobe zram num_devices=6
+          for i in {0..5}; do
+              echo lz4 > /sys/block/zram$i/comp_algorithm
+              echo 256M > /sys/block/zram$i/disksize
+              mkswap /dev/zram$i
+              swapon -p 100 /dev/zram$i
+          done
+          sysctl vm.swappiness=150
+          sysctl vm.page-cluster=0
+          ZRAMSH
+          chmod +x ${ROOTFS_DIR}/usr/local/bin/zram-start
+
+          on_chroot << CHROOT
+          systemctl enable zram.service
+          CHROOT
+
+          # SD-Swap nur 2GB wegen A1
+          sed -i 's/CONF_SWAPSIZE=100/CONF_SWAPSIZE=2048/' ${ROOTFS_DIR}/etc/dphys-swapfile
+
+          # Boot Config: Overclock + FPS
+          cat >> ${ROOTFS_DIR}/boot/config.txt << 'BOOTCONF'
+
+          # MONSTER MODE A1 - KUEHLUNG PFLICHT
+          gpu_mem=32
+          arm_freq=1400
+          over_voltage=8
+          core_freq=550
+          force_turbo=1
+          temp_limit=90
+          disable_splash=1
+          boot_delay=0
+          dtoverlay=vc4-kms-v3d,cma-256
+          initial_turbo=60
+          avoid_warnings=2
+          gpu_freq=750
+          v3d_freq=750
+          h264_freq=750
+          isp_freq=750
+          sdram_freq=550
+          sdram_over_voltage=3
+          BOOTCONF
+
+          # Services killen für RAM
+          on_chroot << CHROOT
+          systemctl disable bluetooth
+          systemctl disable cups
+          systemctl disable avahi-daemon
+          systemctl disable ModemManager
+          systemctl disable apt-daily.timer
+          systemctl disable apt-daily-upgrade.timer
+          systemctl disable man-db.timer
+          systemctl disable triggerhappy
+          systemctl disable rsyslog
+          systemctl disable cron
+          systemctl disable wpa_supplicant
+          systemctl mask systemd-journald
+          systemctl mask systemd-logind
+          CHROOT
+
+          # Kernel Parameter A1
+          cat >> ${ROOTFS_DIR}/etc/sysctl.conf << 'SYSCTL'
+          vm.swappiness=150
+          vm.vfs_cache_pressure=40
+          vm.overcommit_memory=1
+          vm.overcommit_ratio=100
+          vm.dirty_background_ratio=1
+          vm.dirty_ratio=3
+          vm.page-cluster=0
+          vm.min_free_kbytes=32768
+          kernel.sched_autogroup_enabled=0
+          kernel.nmi_watchdog=0
+          SYSCTL
+
+          # tmpfs für A1 schonen
+          echo "tmpfs /tmp tmpfs defaults,noatime,nosuid,size=800m 0 0" >> ${ROOTFS_DIR}/etc/fstab
+          echo "tmpfs /var/log tmpfs defaults,noatime,nosuid,size=100m 0 0" >> ${ROOTFS_DIR}/etc/fstab
+          echo "tmpfs /var/tmp tmpfs defaults,noatime,nosuid,size=200m 0 0" >> ${ROOTFS_DIR}/etc/fstab
+          echo "tmpfs /var/cache/apt tmpfs defaults,noatime,nosuid,size=300m 0 0" >> ${ROOTFS_DIR}/etc/fstab
+
+          # FPS BOOST TOOL
+          cat > ${ROOTFS_DIR}/usr/local/bin/fps-boost << 'FPS'
+          #!/bin/bash
+          echo "EXTREME FPS MODE - 1400MHz / 750MHz GPU"
+          sudo killall lightdm 2>/dev/null
+          sudo killall xfdesktop 2>/dev/null
+          killall xfwm4 2>/dev/null
+          echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null
+          echo 750000000 | sudo tee /sys/class/devfreq/3c000000.gpu/max_freq >/dev/null
+          echo 750000000 | sudo tee /sys/class/devfreq/3c000000.gpu/min_freq >/dev/null
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
+          xfwm4 --replace --vblank=off --compositor=off &
+          echo "CPU: $(vcgencmd measure_clock arm | cut -d= -f2 | awk '{print $1/1000000}')MHz"
+          echo "GPU: $(cat /sys/class/devfreq/3c000000.gpu/cur_freq 2>/dev/null | awk '{print $1/1000000}')MHz"
+          echo "Temp: $(vcgencmd measure_temp)"
+          echo "Bei 85 Grad: fps-normal eingeben!"
+          FPS
+          chmod +x ${ROOTFS_DIR}/usr/local/bin/fps-boost
+
+          cat > ${ROOTFS_DIR}/usr/local/bin/fps-normal << 'FPSN'
+          #!/bin/bash
+          echo "NORMAL MODE"
+          echo ondemand | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null
+          xfwm4 --replace &
+          FPSN
+          chmod +x ${ROOTFS_DIR}/usr/local/bin/fps-normal
+
+          # AUTO-EXPAND SD AUF 32GB
+          on_chroot << CHROOT
+          apt-get install -y parted
+          cat > /usr/lib/raspi-config/init_resize.sh << 'RESIZE'
+          #!/bin/sh
+          if [! -e /boot/.resized ]; then
+            touch /boot/.resized
+            root_part=$(findmnt / -o source -n)
+            root_dev=$(echo "$root_part" | sed 's/p\?[0-9]*$//')
+            part_num=$(echo "$root_part" | grep -o '[0-9]*$')
+            echo ", +" | sfdisk -N $part_num --force $root_dev
+            partprobe
+            resize2fs $root_part
+            sync
+            reboot
+          fi
+          exit 0
+          RESIZE
+          chmod +x /usr/lib/raspi-config/init_resize.sh
+
+          cat > /etc/systemd/system/resize2fs_once.service << 'SERVICE'
+          [Unit]
+          Description=Resize root filesystem
+          DefaultDependencies=no
+          After=local-fs.target
+          Before=systemd-user-sessions.service
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/lib/raspi-config/init_resize.sh
+          RemainAfterExit=yes
+          [Install]
+          WantedBy=sysinit.target
+          SERVICE
+          systemctl enable resize2fs_once.service
+          CHROOT
+
+          # Helper Befehle
+          cat > ${ROOTFS_DIR}/usr/local/bin/ram << 'RAM'
+          #!/bin/bash
+          free -h
+          echo "--- ZRAM ---"
+          swapon --show
+          echo "--- TEMP ---"
+          vcgencmd measure_temp
+          RAM
+          chmod +x ${ROOTFS_DIR}/usr/local/bin/ram
+
+          cat > ${ROOTFS_DIR}/usr/local/bin/cpu << 'CPU'
+          #!/bin/bash
+          vcgencmd measure_clock arm
+          vcgencmd measure_temp
+          vcgencmd get_throttled
+          CPU
+          chmod +x ${ROOTFS_DIR}/usr/local/bin/cpu
+          EOF
+          chmod +x stage2/05-perf/01-run.sh
+
+      - name: Build Image
+        run: |
+          cd pi-gen
+          sudo./build.sh
+
+      - name: Upload Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bubuntu-Monster-A1
+          path: pi-gen/deploy/*.img.xz
