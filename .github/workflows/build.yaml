@@ -76,6 +76,23 @@ jobs:
           TIMEZONE_DEFAULT=${TIMEZONE}
           STAGE_LIST="stage0 stage1 stage2"
           EOF
+          touch ./stage3/SKIP ./stage4/SKIP ./stage5/SKIP      - name: Generate pi-gen config
+        working-directory: pi-gen
+        run: |
+          cat > config << EOF
+          IMG_NAME=${IMG_NAME}
+          RELEASE=${RELEASE}
+          DEPLOY_COMPRESSION=xz
+          TARGET_HOSTNAME=${{ inputs.hostname }}
+          FIRST_USER_NAME=${{ inputs.username }}
+          FIRST_USER_PASS=${{ inputs.password }}
+          ENABLE_SSH=1
+          LOCALE_DEFAULT=${LOCALE}
+          KEYBOARD_KEYMAP=de
+          KEYBOARD_LAYOUT=de
+          TIMEZONE_DEFAULT=${TIMEZONE}
+          STAGE_LIST="stage0 stage1 stage2"
+          EOF
           touch./stage3/SKIP./stage4/SKIP./stage5/SKIP
 
       - name: Create Bubuntu custom stages
