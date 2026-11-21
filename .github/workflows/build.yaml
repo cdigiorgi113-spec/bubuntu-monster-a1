@@ -26,7 +26,7 @@ on:
 
 env:
   IMG_NAME: bubuntu
-  IMG_SIZE_MB: 4
+  IMG_SIZE_MB: 5000
   DEBIAN_RELEASE: bookworm
 
 jobs:
