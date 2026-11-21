@@ -1,4 +1,4 @@
-name: Build Bubuntu No-Pigen A1
+Name: bubuntu
 
 on:
   workflow_dispatch:
@@ -11,22 +11,22 @@ on:
       hostname:
         description: 'Hostname'
         required: true
-        default: 'bubuntu'
+        default: 'user'
         type: string
       username:
         description: 'Username'
         required: true
-        default: 'dev'
+        default: 'user'
         type: string
       password:
         description: 'User password'
         required: true
-        default: 'bubuntu'
+        default: 'user'
         type: string
 
 env:
-  IMG_NAME: Bubuntu-NoPigen-A1
-  IMG_SIZE_MB: 4096
+  IMG_NAME: bubuntu
+  IMG_SIZE_MB: 4
   DEBIAN_RELEASE: bookworm
 
 jobs:
